@@ -1,4 +1,4 @@
-FROM vxider/docker-alpine-java/8_server-jre
+FROM vxider/docker-alpine-java:8_server-jre
 
 ENV CATALINA_HOME /usr/local/tomcat
 ENV PATH $CATALINA_HOME/bin:$PATH
