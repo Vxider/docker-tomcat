@@ -1,126 +1,82 @@
-FROM vxider/docker-alpine-java:8_server-jre
+ FROM tomcat:8.5-jre8-alpine
 
-ENV CATALINA_HOME /usr/local/tomcat
-ENV PATH $CATALINA_HOME/bin:$PATH
-RUN mkdir -p "$CATALINA_HOME"
-WORKDIR $CATALINA_HOME
+ # =============================================================================
+ #                                  install Oracle JDK8
+ # =============================================================================
+ # Java Version and other ENV
+ ENV JAVA_VERSION_MAJOR=8 \
+     JAVA_VERSION_MINOR=152 \
+     JAVA_VERSION_BUILD=16 \
+     JAVA_PACKAGE=server-jre \
+     JAVA_JCE=standard \
+     JAVA_HOME=/opt/jdk \
+     PATH=${PATH}:/opt/jdk/bin \
+     GLIBC_REPO=https://github.com/sgerrand/alpine-pkg-glibc \
+     GLIBC_VERSION=2.26-r0 \
+     LANG=C.UTF-8
 
-# let "Tomcat Native" live somewhere isolated
-ENV TOMCAT_NATIVE_LIBDIR $CATALINA_HOME/native-jni-lib
-ENV LD_LIBRARY_PATH ${LD_LIBRARY_PATH:+$LD_LIBRARY_PATH:}$TOMCAT_NATIVE_LIBDIR
+ # do all in one step
+ RUN set -ex && \
+     [[ ${JAVA_VERSION_MAJOR} != 7 ]] || ( echo >&2 'Oracle no longer publishes JAVA7 packages' && exit 1 ) && \
+     apk upgrade --update && \
+     apk add --update libstdc++ curl ca-certificates bash java-cacerts && \
+     for pkg in glibc-${GLIBC_VERSION} glibc-bin-${GLIBC_VERSION} glibc-i18n-${GLIBC_VERSION}; do curl -sSL ${GLIBC_REPO}/releases/download/  ${GLIBC_VERSION}/${pkg}.apk -o /tmp/${pkg}.apk; done && \
+     apk add --allow-untrusted /tmp/*.apk && \
+     rm -v /tmp/*.apk && \
+     ( /usr/glibc-compat/bin/localedef --force --inputfile POSIX --charmap UTF-8 C.UTF-8 || true ) && \
+     echo "export LANG=C.UTF-8" > /etc/profile.d/locale.sh && \
+     /usr/glibc-compat/sbin/ldconfig /lib /usr/glibc-compat/lib && \
+     mkdir /opt && \
+     curl -jksSLH "Cookie: oraclelicense=accept-securebackup-cookie" -o /tmp/java.tar.gz \
+       http://download.oracle.com/otn-pub/java/jdk/${JAVA_VERSION_MAJOR}u${JAVA_VERSION_MINOR}-b${JAVA_VERSION_BUILD}/                        aa0333dd3019491ca4f6ddbe78cdb6d0/${JAVA_PACKAGE}-${JAVA_VERSION_MAJOR}u${JAVA_VERSION_MINOR}-linux-x64.tar.gz && \
 
-RUN apk add --no-cache gnupg
+     JAVA_PACKAGE_SHA256=$(curl -sSL https://www.oracle.com/webfolder/s/digest/${JAVA_VERSION_MAJOR}u${JAVA_VERSION_MINOR}checksum.html |     grep -E "${JAVA_PACKAGE}-${JAVA_VERSION_MAJOR}u${JAVA_VERSION_MINOR}-linux-x64\.tar\.gz" | grep -Eo '(sha256: )[^<]+' | cut -d: -f2 |        xargs) && \
+     echo "${JAVA_PACKAGE_SHA256}  /tmp/java.tar.gz" > /tmp/java.tar.gz.sha256 && \
+     sha256sum -c /tmp/java.tar.gz.sha256 && \
+     gunzip /tmp/java.tar.gz && \
+     tar -C /opt -xf /tmp/java.tar && \
+     ln -s /opt/jdk1.${JAVA_VERSION_MAJOR}.0_${JAVA_VERSION_MINOR} /opt/jdk && \
+     find /opt/jdk/ -maxdepth 1 -mindepth 1 | grep -v jre | xargs rm -rf && \
+     cd /opt/jdk/ && ln -s ./jre/bin ./bin && \
+     if [ "${JAVA_JCE}" == "unlimited" ]; then echo "Installing Unlimited JCE policy" && \
+       curl -jksSLH "Cookie: oraclelicense=accept-securebackup-cookie" -o /tmp/jce_policy-${JAVA_VERSION_MAJOR}.zip \
+         http://download.oracle.com/otn-pub/java/jce/${JAVA_VERSION_MAJOR}/jce_policy-${JAVA_VERSION_MAJOR}.zip && \
+       cd /tmp && unzip /tmp/jce_policy-${JAVA_VERSION_MAJOR}.zip && \
+       cp -v /tmp/UnlimitedJCEPolicyJDK8/*.jar /opt/jdk/jre/lib/security/; \
+     fi && \
+     sed -i s/#networkaddress.cache.ttl=-1/networkaddress.cache.ttl=10/ $JAVA_HOME/jre/lib/security/java.security && \
+     apk del curl glibc-i18n && \
+     rm -rf /opt/jdk/jre/plugin \
+            /opt/jdk/jre/bin/javaws \
+            /opt/jdk/jre/bin/jjs \
+            /opt/jdk/jre/bin/orbd \
+            /opt/jdk/jre/bin/pack200 \
+            /opt/jdk/jre/bin/policytool \
+            /opt/jdk/jre/bin/rmid \
+            /opt/jdk/jre/bin/rmiregistry \
+            /opt/jdk/jre/bin/servertool \
+            /opt/jdk/jre/bin/tnameserv \
+            /opt/jdk/jre/bin/unpack200 \
+            /opt/jdk/jre/lib/javaws.jar \
+            /opt/jdk/jre/lib/deploy* \
+            /opt/jdk/jre/lib/desktop \
+            /opt/jdk/jre/lib/*javafx* \
+            /opt/jdk/jre/lib/*jfx* \
+            /opt/jdk/jre/lib/amd64/libdecora_sse.so \
+            /opt/jdk/jre/lib/amd64/libprism_*.so \
+            /opt/jdk/jre/lib/amd64/libfxplugins.so \
+            /opt/jdk/jre/lib/amd64/libglass.so \
+            /opt/jdk/jre/lib/amd64/libgstreamer-lite.so \
+            /opt/jdk/jre/lib/amd64/libjavafx*.so \
+            /opt/jdk/jre/lib/amd64/libjfx*.so \
+            /opt/jdk/jre/lib/ext/jfxrt.jar \
+            /opt/jdk/jre/lib/ext/nashorn.jar \
+            /opt/jdk/jre/lib/oblique-fonts \
+            /opt/jdk/jre/lib/plugin.jar \
+            /tmp/* /var/cache/apk/* && \
+     ln -sf /etc/ssl/certs/java/cacerts $JAVA_HOME/jre/lib/security/cacerts && \
+     echo 'hosts: files mdns4_minimal [NOTFOUND=return] dns mdns4' >> /etc/nsswitch.conf
 
-# see https://www.apache.org/dist/tomcat/tomcat-$TOMCAT_MAJOR/KEYS
-# see also "update.sh" (https://github.com/docker-library/tomcat/blob/master/update.sh)
-ENV GPG_KEYS 05AB33110949707C93A279E3D3EFE6B686867BA6 07E48665A34DCAFAE522E5E6266191C37C037D42 47309207D818FFD8DCD3F83F1931D684307A10A5 541FBE7D8F78B25E055DDEE13C370389288584E7 61B832AC2F1C5A90F0F9B00A1C506407564C17A3 713DA88BE50911535FE716F5208B0AB1D63011C7 79F7026C690BAA50B92CD8B66A3AD3F4F22C4FED 9BA44C2621385CB966EBA586F72C284D731FABEE A27677289986DB50844682F8ACB77FC2E86E29AC A9C5DF4D22E99998D9875A5110C01C5A2F6059E7 DCFD35E0BF8CA7344752DE8B6FB21E8933C60243 F3A04C595DB5B6A5F1ECA43E3B7BBB100D811BBE F7DA48BB64BCB84ECBA7EE6935CD23C10D498E23
-RUN set -ex; \
-	for key in $GPG_KEYS; do \
-		gpg --keyserver ha.pool.sks-keyservers.net --recv-keys "$key"; \
-	done
-
-ENV TOMCAT_MAJOR 8
-ENV TOMCAT_VERSION 8.5.24
-ENV TOMCAT_SHA1 9e26ba61c5665aafc849073edeb769be555283cd
-
-ENV TOMCAT_TGZ_URLS \
-# https://issues.apache.org/jira/browse/INFRA-8753?focusedCommentId=14735394#comment-14735394
-	https://www.apache.org/dyn/closer.cgi?action=download&filename=tomcat/tomcat-$TOMCAT_MAJOR/v$TOMCAT_VERSION/bin/apache-tomcat-$TOMCAT_VERSION.tar.gz \
-# if the version is outdated, we might have to pull from the dist/archive :/
-	https://www-us.apache.org/dist/tomcat/tomcat-$TOMCAT_MAJOR/v$TOMCAT_VERSION/bin/apache-tomcat-$TOMCAT_VERSION.tar.gz \
-	https://www.apache.org/dist/tomcat/tomcat-$TOMCAT_MAJOR/v$TOMCAT_VERSION/bin/apache-tomcat-$TOMCAT_VERSION.tar.gz \
-	https://archive.apache.org/dist/tomcat/tomcat-$TOMCAT_MAJOR/v$TOMCAT_VERSION/bin/apache-tomcat-$TOMCAT_VERSION.tar.gz
-
-ENV TOMCAT_ASC_URLS \
-	https://www.apache.org/dyn/closer.cgi?action=download&filename=tomcat/tomcat-$TOMCAT_MAJOR/v$TOMCAT_VERSION/bin/apache-tomcat-$TOMCAT_VERSION.tar.gz.asc \
-# not all the mirrors actually carry the .asc files :'(
-	https://www-us.apache.org/dist/tomcat/tomcat-$TOMCAT_MAJOR/v$TOMCAT_VERSION/bin/apache-tomcat-$TOMCAT_VERSION.tar.gz.asc \
-	https://www.apache.org/dist/tomcat/tomcat-$TOMCAT_MAJOR/v$TOMCAT_VERSION/bin/apache-tomcat-$TOMCAT_VERSION.tar.gz.asc \
-	https://archive.apache.org/dist/tomcat/tomcat-$TOMCAT_MAJOR/v$TOMCAT_VERSION/bin/apache-tomcat-$TOMCAT_VERSION.tar.gz.asc
-
-RUN set -eux; \
-	\
-	apk add --no-cache --virtual .fetch-deps \
-		ca-certificates \
-		openssl \
-	; \
-	\
-	success=; \
-	for url in $TOMCAT_TGZ_URLS; do \
-		if wget -O tomcat.tar.gz "$url"; then \
-			success=1; \
-			break; \
-		fi; \
-	done; \
-	[ -n "$success" ]; \
-	\
-	echo "$TOMCAT_SHA1 *tomcat.tar.gz" | sha1sum -c -; \
-	\
-	success=; \
-	for url in $TOMCAT_ASC_URLS; do \
-		if wget -O tomcat.tar.gz.asc "$url"; then \
-			success=1; \
-			break; \
-		fi; \
-	done; \
-	[ -n "$success" ]; \
-	\
-	gpg --batch --verify tomcat.tar.gz.asc tomcat.tar.gz; \
-	tar -xvf tomcat.tar.gz --strip-components=1; \
-	rm bin/*.bat; \
-	rm tomcat.tar.gz*; \
-	\
-	nativeBuildDir="$(mktemp -d)"; \
-	tar -xvf bin/tomcat-native.tar.gz -C "$nativeBuildDir" --strip-components=1; \
-	apk add --no-cache --virtual .native-build-deps \
-		apr-dev \
-		coreutils \
-		dpkg-dev dpkg \
-		gcc \
-		libc-dev \
-		make \
-		"openjdk${JAVA_VERSION%%[-~bu]*}"="$JAVA_ALPINE_VERSION" \
-		openssl-dev \
-	; \
-	( \
-		export CATALINA_HOME="$PWD"; \
-		cd "$nativeBuildDir/native"; \
-		gnuArch="$(dpkg-architecture --query DEB_BUILD_GNU_TYPE)"; \
-		./configure \
-			--build="$gnuArch" \
-			--libdir="$TOMCAT_NATIVE_LIBDIR" \
-			--prefix="$CATALINA_HOME" \
-			--with-apr="$(which apr-1-config)" \
-			--with-java-home="$(docker-java-home)" \
-			--with-ssl=yes; \
-		make -j "$(nproc)"; \
-		make install; \
-	); \
-	runDeps="$( \
-		scanelf --needed --nobanner --format '%n#p' --recursive "$TOMCAT_NATIVE_LIBDIR" \
-			| tr ',' '\n' \
-			| sort -u \
-			| awk 'system("[ -e /usr/local/lib/" $1 " ]") == 0 { next } { print "so:" $1 }' \
-	)"; \
-	apk add --virtual .tomcat-native-rundeps $runDeps; \
-	apk del .fetch-deps .native-build-deps; \
-	rm -rf "$nativeBuildDir"; \
-	rm bin/tomcat-native.tar.gz; \
-	\
-# sh removes env vars it doesn't support (ones with periods)
-# https://github.com/docker-library/tomcat/issues/77
-	apk add --no-cache bash; \
-	find ./bin/ -name '*.sh' -exec sed -ri 's|^#!/bin/sh$|#!/usr/bin/env bash|' '{}' +
-
-# verify Tomcat Native is working properly
-RUN set -e \
-	&& nativeLines="$(catalina.sh configtest 2>&1)" \
-	&& nativeLines="$(echo "$nativeLines" | grep 'Apache Tomcat Native')" \
-	&& nativeLines="$(echo "$nativeLines" | sort -u)" \
-	&& if ! echo "$nativeLines" | grep 'INFO: Loaded APR based Apache Tomcat Native library' >&2; then \
-		echo >&2 "$nativeLines"; \
-		exit 1; \
-	fi
-
-EXPOSE 8080
-CMD ["catalina.sh", "run"]
+ # 设置时区
+ RUN apk add -U tzdata
+ ENV TZ=Asia/Shanghai
